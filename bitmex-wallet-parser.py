@@ -1,8 +1,9 @@
 #!/usr/bin/env python3.6
 
-# Logging module
-import logging
-logging.basicConfig(level=logging.INFO)
+# logger module
+import coloredlogs, logging
+logger = logging.getLogger(__name__)
+coloredlogs.install(level='DEBUG', logger=logger)
 
 # Finding files
 import glob
@@ -48,42 +49,119 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('-s', '--start_datetime', help='Start date', default=None, type=(lambda s: datetime.strptime(s, '%Y-%m-%d %H:%M')) )
 parser.add_argument('-e', '--end_datetime', help='End date', default=None, type=(lambda s: datetime.strptime(s, '%Y-%m-%d %H:%M')) )
-parser.add_argument('--hide-wallet', action='store_true', default=True, help='hide wallet / transaction date')
-parser.add_argument('--hide-affiliate', action='store_true', default=True, help='hide affiliate data')
+parser.add_argument('--show-wallet', action='store_true', help='hide wallet / transaction date')
+parser.add_argument('--show-affiliate', action='store_true', help='hide affiliate data')
 parser.add_argument('--hide-trading', action='store_true', help='hide trading data')
-parser.add_argument('--private', action='store_true', default=True, help='hide numerical values')
+parser.add_argument('--showmoney', action='store_true', help='hide numerical values')
+parser.add_argument('--use-api', action='store_true', help='Fetch historical trading data via bitmex api')
 
 args = parser.parse_args()
 start_datetime = args.start_datetime
 end_datetime   = args.end_datetime
 
-total_plots = 3
+total_plots = 1
 
-if args.hide_wallet    == True:
-	total_plots -= 1
-if args.hide_affiliate == True:
-	total_plots -= 1
+if args.show_wallet    == True:
+	total_plots += 1
+if args.show_affiliate == True:
+	total_plots += 1
 if args.hide_trading   == True:
 	total_plots -= 1
 
 if total_plots == 0:
-	logging.warning('All available plots set to hidden. nothing to show')
+	logger.warning('All available plots set to hidden. nothing to show')
 	exit()
 
 
 ############################################################
 
 
-# Get the downloaded bitmex wallet files
-files = sorted(glob.glob('Wallet*'))
+if args.use_api == True:
+	
+	# pip install bitmex - https://github.com/BitMEX/api-connectors/tree/master/official-http/python-swaggerpy
+	import bitmex
+	import csv
+	from pathlib import Path
 
-if len(files) == 0:
-	logging.warning('No valid bitmex wallet files found.')
-	exit()
+	bitmex_api_key    = None
+	bitmex_api_secret = None 
 
 
-# Get the latest most up to date wallet file
-wallet_file = files[len(files)-1]
+	confg_file = Path("config.json")
+	if confg_file.is_file():
+		with open(confg_file, 'r') as file:
+			data = file.read()
+			obj  =  json_loads(data)
+
+			if 'bitmex_api_key' not in obj:
+				logger.critical('config.json missing bitmex_api_key')
+				exit()
+
+			elif 'bitmex_api_secret' not in obj:
+				logger.critical('config.json missing bitmex_api_secret')
+				exit()
+
+			else:
+				bitmex_api_key = obj['bitmex_api_key']
+				bitmex_api_secret = obj['bitmex_api_secret']
+
+
+	if (bitmex_api_key == None) or (bitmex_api_secret == None):
+
+		print('\033[95m',"-------------------------------", '\033[0m')
+		print('\033[92m','--use-api is set to True \n','\033[0m')
+		print('You do not have your bitmex api keys stored in config.json. You can enter them here.')
+		print('If you do not have an api key one can be obtained from: https://www.bitmex.com/app/apiKeys \n')
+		print('These keys will not be saved to config.json, you must do that manually as saving api keys in plain text is an important security consideration.\n')
+
+		bitmex_api_key    = input("Enter you Bitmex API Key: ")
+		bitmex_api_secret = input("Enter you Bitmex API Secret: ")
+
+	wallet_file  = "Wallet-History-from-api.csv"
+	client 	     = bitmex.bitmex(test=False, api_key=bitmex_api_key,api_secret=bitmex_api_secret)
+	data         = client.User.User_getWalletHistory(count=5000000).result()
+
+	fieldnames = [
+	    	'transactTime',
+	    	'transactType',
+	    	'amount',
+	    	'fee',
+	    	'address',
+	    	'transactStatus',
+	    	'walletBalance'
+	    ]
+	with open(wallet_file, "w", newline='') as f:
+	    writer = csv.DictWriter(f, fieldnames=fieldnames)
+	    writer.writerow({
+			'transactTime'  : 'transactTime',
+			'transactType'  : 'transactType',
+			'amount' 	    : 'amount',
+			'fee'		    : 'fee',
+			'address' 	    : 'address',
+			'transactStatus': 'transactStatus',
+			'walletBalance' : 'walletBalance'
+		})
+	    for x in data[0]:
+	        t = {}
+	        for field in fieldnames:
+	        	if field == 'transactTime':
+	        		t[field] = x[field].strftime('%Y-%m-%d %H:%M:%S.%f')
+	        	else:
+	        		t[field] = x[field] 
+
+	        logger.info('Writing row: '+str(t))
+	        writer.writerow(t)
+
+else : 
+	# Get the downloaded bitmex wallet files
+	files = sorted(glob.glob('Wallet*'))
+
+	if len(files) == 0:
+		logger.warning('No valid bitmex wallet files found.')
+		exit()
+
+	# Get the latest most up to date wallet file
+	wallet_file = files[len(files)-1]
 
 ############################################################
 
@@ -130,7 +208,7 @@ now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 if (end_datetime == None) or (end_datetime > now): 
 	end_datetime = now 
 
-logging.info('Querying candles between: '+str(start_datetime)+' and '+str(end_datetime))
+logger.info('Querying candles between: '+str(start_datetime)+' and '+str(end_datetime))
 
 candles   = finex.api_request_candles( '1D', 'BTCUSD', start_datetime, end_datetime )
 
@@ -148,7 +226,7 @@ candle_df = candle_df[~candle_df.index.duplicated(keep='last')]
 
 
 # Begin plot
-fig = plt.figure(facecolor='white', figsize=(12, 8), dpi=100)
+fig = plt.figure(facecolor='white', figsize=(15, 11), dpi=100)
 fig.suptitle('Bitmex Account History & Performance')
 
 on_plot = 1
@@ -156,7 +234,7 @@ on_plot = 1
 """
 Wallet / Transaction History
 """
-if args.hide_wallet != True:
+if args.show_wallet == True:
 
 	ax1 = plt.subplot(total_plots,1,on_plot)
 	on_plot += 1
@@ -164,10 +242,10 @@ if args.hide_wallet != True:
 	ax1.set_title('Transaction History')
 
 	# If flagged private, hide btc values
-	if args.private == True:
-		ax1.get_yaxis().set_ticks([])
-	else:
+	if args.showmoney == True:
 		ax1.set_ylabel('BTC')
+	else:
+		ax1.get_yaxis().set_ticks([])
 
 	ax1.plot( df.index.values, df['amount'].values.cumsum()/100000000, color='b') 
 	ax1.fmt_xdata = mdates.DateFormatter('%d/%m/%Y')
@@ -175,7 +253,7 @@ if args.hide_wallet != True:
 
 	# Add bitcoin price 
 	ax11 = ax1.twinx()
-	ax11.set_yscale('log')
+	# ax11.set_yscale('log')
 	ax11.fill_between(candle_df.index.values, candle_df['low'].min(), candle_df['close'].values, facecolor='blue', alpha=0.2)
 	ax11.yaxis.set_major_formatter(ScalarFormatter())
 
@@ -199,7 +277,7 @@ if args.hide_wallet != True:
 """
 Affiliate Income
 """
-if args.hide_affiliate != True:
+if args.show_affiliate == True:
 
 	ax2 = plt.subplot(total_plots,1,on_plot)
 	on_plot += 1
@@ -207,10 +285,10 @@ if args.hide_affiliate != True:
 	ax2.set_title('Affiliate income')
 
 	# If flagged private, hide btc values
-	if args.private == True:
-		ax2.get_yaxis().set_ticks([])
-	else:
+	if args.showmoney == True:
 		ax2.set_ylabel('BTC')
+	else:
+		ax2.get_yaxis().set_ticks([])
 
 	mask = (df['transactType'] == 'AffiliatePayout')
 	ax2.plot( df[mask].index.values, df[mask]['amount'].values.cumsum()/100000000, color='b') 
@@ -219,7 +297,7 @@ if args.hide_affiliate != True:
 
 	# Add bitcoin price 
 	ax22 = ax2.twinx()
-	ax22.set_yscale('log')
+	# ax22.set_yscale('log')
 	ax22.fill_between(candle_df.index.values, candle_df['low'].min(), candle_df['close'].values, facecolor='blue', alpha=0.2)
 	ax22.yaxis.set_major_formatter(ScalarFormatter())
 
@@ -235,10 +313,10 @@ if args.hide_trading != True:
 	ax3.set_title('Trading Returns')
 
 	# If flagged private, hide btc values
-	if args.private == True:
-		ax3.get_yaxis().set_ticks([])
-	else:
+	if args.showmoney== True:
 		ax3.set_ylabel('BTC')
+	else:
+		ax3.get_yaxis().set_ticks([])
 
 	mask = (df['transactType'] == ('RealisedPNL' or 'CashRebalance'))
 	line = ax3.plot( df[mask].index.values, df[mask]['amount'].values.cumsum()/100000000, color='red', label='Performance') 
@@ -268,7 +346,7 @@ if args.hide_trading != True:
 fig.autofmt_xdate()
 
 # Save figure 
-saved_plot_filename = datetime.today().strftime('%Y-%m-%d-%H:%M:%S')+'.png'
+saved_plot_filename = datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+'.png'
 plt.savefig(saved_plot_filename, bbox_inches='tight')
 
 
@@ -276,7 +354,14 @@ plt.savefig(saved_plot_filename, bbox_inches='tight')
 ############################################################
 
 
-
-pprint(wallet_file)
-pprint(df.head(4))
-pprint(df.tail(4))
+print('\033[95m',"-------------------------------", '\033[0m')
+print('\033[92m',wallet_file,'\033[0m')
+print('\033[95m', "-------------------------------", '\033[0m')
+print('\033[93m', 'Candle df contents', '\033[0m')
+print(candle_df.head(4))
+print(candle_df.tail(4))
+print('\033[95m', "-------------------------------", '\033[0m')
+print('\033[93m', 'Wallet df contents', '\033[0m')
+print(df.head(4))
+print(df.tail(4))
+print('\033[95m', "-------------------------------", '\033[0m')
